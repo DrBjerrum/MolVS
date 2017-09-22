@@ -19,6 +19,7 @@ from rdkit import Chem
 from rdkit.Chem.rdchem import BondDir, BondStereo, BondType
 
 from .utils import memoized_property, pairwise
+from .errors import BreakLoop
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +161,7 @@ class TautomerCanonicalizer(object):
         """
         self.transforms = transforms
         self.scores = scores
+	log.debug(self.scores)
         self.max_tautomers = max_tautomers
 
     def __call__(self, mol):
@@ -175,6 +177,7 @@ class TautomerCanonicalizer(object):
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
         # TODO: Overload the mol parameter to pass a list of pre-enumerated tautomers
+	log.info("Enumerating and scoring possible tautomers.")
         tautomers = self._enumerate_tautomers(mol)
         if len(tautomers) == 1:
             return tautomers[0]
@@ -183,7 +186,22 @@ class TautomerCanonicalizer(object):
         for t in tautomers:
             smiles = Chem.MolToSmiles(t, isomericSmiles=True)
             log.debug('Tautomer: %s', smiles)
-            score = 0
+            score = self.score_mol(t)
+#            # Set as highest if score higher or if score equal and smiles comes first alphabetically
+            if not highest or highest['score'] < score or (highest['score'] == score and smiles < highest['smiles']):
+                log.debug('New highest tautomer: %s (%s)', smiles, score)
+                highest = {'smiles': smiles, 'tautomer': t, 'score': score}
+        log.info("Best scoring tautomer selected: %s (%s)"%(highest['smiles'], highest['score']))
+        return highest['tautomer']
+
+   
+    def score_mol(self,t):
+	    """ Returns the tautomer score of the RDmol provided
+	    :param t: The input molecule.
+            :type mol: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
+            :return: The Tautomer Score.
+            :rtype: integer"""
+	    score = 0
             # Add aromatic ring scores
             ssr = Chem.GetSymmSSSR(t)
             for ring in ssr:
@@ -207,11 +225,7 @@ class TautomerCanonicalizer(object):
                     if hs:
                         log.debug('Score %+d (%s-H bonds)', -hs, atom.GetSymbol())
                         score -= hs
-            # Set as highest if score higher or if score equal and smiles comes first alphabetically
-            if not highest or highest['score'] < score or (highest['score'] == score and smiles < highest['smiles']):
-                log.debug('New highest tautomer: %s (%s)', smiles, score)
-                highest = {'smiles': smiles, 'tautomer': t, 'score': score}
-        return highest['tautomer']
+	    return score
 
     @memoized_property
     def _enumerate_tautomers(self):
@@ -246,46 +260,60 @@ class TautomerEnumerator(object):
         """
         tautomers = {Chem.MolToSmiles(mol, isomericSmiles=True): copy.deepcopy(mol)}
         done = set()
-        while len(tautomers) < self.max_tautomers:
-            for tsmiles in sorted(tautomers):
-                if tsmiles in done:
-                    continue
-                for transform in self.transforms:
-                    for match in tautomers[tsmiles].GetSubstructMatches(transform.tautomer):
-                        # Adjust hydrogens
-                        product = copy.deepcopy(tautomers[tsmiles])
-                        first = product.GetAtomWithIdx(match[0])
-                        last = product.GetAtomWithIdx(match[-1])
-                        first.SetNumExplicitHs(max(0, first.GetNumExplicitHs() - 1))
-                        last.SetNumExplicitHs(last.GetTotalNumHs() + 1)
-                        # Adjust bond orders
-                        for bi, pair in enumerate(pairwise(match)):
-                            if transform.bonds:
-                                product.GetBondBetweenAtoms(*pair).SetBondType(transform.bonds[bi])
-                            else:
-                                product.GetBondBetweenAtoms(*pair).SetBondType(BondType.DOUBLE if bi % 2 == 0 else BondType.SINGLE)
-                        # Adjust charges
-                        if transform.charges:
-                            for ci, idx in enumerate(match):
-                                atom = product.GetAtomWithIdx(idx)
-                                atom.SetFormalCharge(atom.GetFormalCharge() + transform.charges[ci])
-                        try:
-                            Chem.SanitizeMol(product)
-                            smiles = Chem.MolToSmiles(product, isomericSmiles=True)
-                            log.debug('Applied rule: %s to %s', transform.name, tsmiles)
-                            if smiles not in tautomers:
-                                log.debug('New tautomer produced: %s' % smiles)
-                                tautomers[smiles] = product
-                            else:
-                                log.debug('Previous tautomer produced again: %s' % smiles)
-                        except ValueError:
-                            log.debug('ValueError')
-                done.add(tsmiles)
-            if len(tautomers) == len(done):
-                break
-        else:
-            log.warn('Tautomer enumeration stopped at maximum %s', self.max_tautomers)
-        # Clean up stereochemistry
+	#log.debug('Max_tautomers: %s', self.max_tautomers)
+	try:
+		while len(tautomers) < self.max_tautomers:
+		    for tsmiles in sorted(tautomers):
+		        if tsmiles in done:
+		            continue
+		        for transform in self.transforms:
+		            for match in tautomers[tsmiles].GetSubstructMatches(transform.tautomer):
+		                # Adjust hydrogens
+		                product = copy.deepcopy(tautomers[tsmiles])
+				#Chem.Kekulize(product)
+		                first = product.GetAtomWithIdx(match[0])
+		                last = product.GetAtomWithIdx(match[-1])
+		                first.SetNumExplicitHs(max(0, first.GetNumExplicitHs() - 1))
+		                last.SetNumExplicitHs(last.GetTotalNumHs() + 1)
+		                # Adjust bond orders
+		                for bi, pair in enumerate(pairwise(match)):
+		                    if transform.bonds:
+		                        product.GetBondBetweenAtoms(*pair).SetBondType(transform.bonds[bi])
+		                    else:
+		                        product.GetBondBetweenAtoms(*pair).SetBondType(BondType.DOUBLE if bi % 2 == 0 else BondType.SINGLE)
+		                # Adjust charges
+		                if transform.charges:
+		                    for ci, idx in enumerate(match):
+		                        atom = product.GetAtomWithIdx(idx)
+		                        atom.SetFormalCharge(atom.GetFormalCharge() + transform.charges[ci])
+		                try:
+		                    Chem.SanitizeMol(product, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL)
+				    #Chem.Kekulize(product)
+				    #Chem.SanitizeMol(product, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL^Chem.SanitizeFlags.SANITIZE_KEKULIZE^Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
+		                    smiles = Chem.MolToSmiles(product, isomericSmiles=True)
+		                    log.debug('Applied rule: %s to %s', transform.name, tsmiles)
+		                    if smiles not in tautomers:
+		                        log.debug('New tautomer produced: %s' % smiles)
+		                        tautomers[smiles] = product
+		                    else:
+		                        log.debug('Previous tautomer produced again: %s' % smiles)
+		                except ValueError:
+		                    log.debug('ValueError')
+				    log.debug('Applied rule: %s to %s', transform.name, tsmiles)
+				    smiles = Chem.MolToSmiles(product, isomericSmiles=True)
+	                            log.debug('FAIL tautomer produced: %s' % smiles)
+		                    log.debug('Sanitazion of product failed')
+		                if len(tautomers) >= self.max_tautomers:
+					#log.warn('Tautomer enumeration stopped at maximum %s', self.max_tautomers)
+					#Raise breakloop to break out of loop as soom as max_tautomers are reached.
+					raise BreakLoop
+			done.add(tsmiles)
+		    if len(tautomers) == len(done):
+                		break
+	except BreakLoop:
+		log.warn('Tautomer enumeration stopped at maximum %s', self.max_tautomers)
+	log.info('Number of Tautomers enumerated: %s', len(tautomers))
+	# Clean up stereochemistry
         for tautomer in tautomers.values():
             Chem.AssignStereochemistry(tautomer, force=True, cleanIt=True)
             for bond in tautomer.GetBonds():
@@ -302,3 +330,76 @@ class TautomerEnumerator(object):
                             log.debug('Removed stereochemistry from unfixed double bond')
                             break
         return tautomers.values()
+
+
+    def test_enumeration(self, mol, wantedmol):
+        """Enumerate all possible tautomers and return them as a list.
+
+        :param mol: The input molecule.
+        :type mol: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
+        :return: A list of all possible tautomers of the molecule.
+        :rtype: list of :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
+        """
+        tautomers = {Chem.MolToSmiles(mol, isomericSmiles=True): copy.deepcopy(mol)}
+	wantedsmiles = Chem.MolToSmiles(wantedmol, isomericSmiles=True)
+        done = set()
+	#log.info('Max_tautomers: %s', self.max_tautomers)
+	try:
+		while len(tautomers) < self.max_tautomers:
+		    for tsmiles in sorted(tautomers):
+		        if tsmiles in done:
+		            continue
+		        for transform in self.transforms:
+		            for match in tautomers[tsmiles].GetSubstructMatches(transform.tautomer):
+		                # Adjust hydrogens
+		                product = copy.deepcopy(tautomers[tsmiles])
+				#Chem.Kekulize(product)
+		                first = product.GetAtomWithIdx(match[0])
+		                last = product.GetAtomWithIdx(match[-1])
+		                first.SetNumExplicitHs(max(0, first.GetNumExplicitHs() - 1))
+		                last.SetNumExplicitHs(last.GetTotalNumHs() + 1)
+		                # Adjust bond orders
+		                for bi, pair in enumerate(pairwise(match)):
+		                    if transform.bonds:
+		                        product.GetBondBetweenAtoms(*pair).SetBondType(transform.bonds[bi])
+		                    else:
+		                        product.GetBondBetweenAtoms(*pair).SetBondType(BondType.DOUBLE if bi % 2 == 0 else BondType.SINGLE)
+		                # Adjust charges
+		                if transform.charges:
+		                    for ci, idx in enumerate(match):
+		                        atom = product.GetAtomWithIdx(idx)
+		                        atom.SetFormalCharge(atom.GetFormalCharge() + transform.charges[ci])
+		                try:
+		                    Chem.SanitizeMol(product, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL)
+				    #Chem.Kekulize(product)
+				    #Chem.SanitizeMol(product, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL^Chem.SanitizeFlags.SANITIZE_KEKULIZE^Chem.SanitizeFlags.SANITIZE_SETAROMATICITY)
+		                    smiles = Chem.MolToSmiles(product, isomericSmiles=True)
+		                    log.debug('Applied rule: %s to %s', transform.name, tsmiles)
+		                    if smiles not in tautomers:
+		                        log.debug('New tautomer produced: %s' % smiles)
+		                        tautomers[smiles] = product
+					#Test if its the wanted one
+					if smiles == wantedsmiles:
+						log.debug('Match the Wanted')
+						return True
+		                    else:
+		                        log.debug('Previous tautomer produced again: %s' % smiles)
+		                except ValueError:
+		                    log.debug('ValueError')
+				    log.debug('Applied rule: %s to %s', transform.name, tsmiles)
+				    smiles = Chem.MolToSmiles(product, isomericSmiles=True)
+	                            log.debug('FAIL tautomer produced: %s' % smiles)
+		                    log.info('Sanitazion of product failed')
+		                if len(tautomers) >= self.max_tautomers:
+					#log.warn('Tautomer enumeration stopped at maximum %s', self.max_tautomers)
+					raise BreakLoop
+			done.add(tsmiles)
+		    if len(tautomers) == len(done):
+                		break
+	except BreakLoop:
+		log.warn('Tautomer enumeration stopped at maximum %s', self.max_tautomers)
+	log.info('Number of Tautomers enumerated: %s', len(tautomers))
+	log.info('Wanted Molecule now amongst them')
+	return False
+
+

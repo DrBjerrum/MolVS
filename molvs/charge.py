@@ -128,7 +128,7 @@ class Reionizer(object):
         :return: The reionized molecule.
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
-        log.debug('Running Reionizer')
+        log.info('Running Reionizer')
         while True:
             ppos, poccur = self._strongest_protonated(mol)
             ipos, ioccur = self._weakest_ionized(mol)
@@ -191,7 +191,7 @@ class Uncharger(object):
         :return: The uncharged molecule.
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
-        log.debug('Running Uncharger')
+        log.info('Running Uncharger')
         mol = copy.deepcopy(mol)
         # Get atom ids for matches
         p = [x[0] for x in mol.GetSubstructMatches(self._pos_h)]
@@ -208,22 +208,22 @@ class Uncharger(object):
                     # Add hydrogen to first negative acid atom, increase formal charge
                     # Until quaternary positive == negative total or no more negative acid
                     atom = mol.GetAtomWithIdx(a.pop(0))
-                    atom.SetNumExplicitHs(atom.GetNumExplicitHs() + 1)
+                    #atom.SetNumExplicitHs(atom.GetNumExplicitHs() + 1)
                     atom.SetFormalCharge(atom.GetFormalCharge() + 1)
                     neg_surplus -= 1
-                    log.info('Removed negative charge')
+                    log.info('Removed negative charge from %s'%(atom.GetSymbol() + str(atom.GetIdx())))
         else:
             #
             for atom in [mol.GetAtomWithIdx(x) for x in n]:
                 while atom.GetFormalCharge() < 0:
-                    atom.SetNumExplicitHs(atom.GetNumExplicitHs() + 1)
+                    #atom.SetNumExplicitHs(atom.GetNumExplicitHs() + 1)
                     atom.SetFormalCharge(atom.GetFormalCharge() + 1)
-                    log.info('Removed negative charge')
+                    log.info('n: Removed negative charge from %s'%(atom.GetSymbol() + str(atom.GetIdx())))
         # Neutralize positive charges
         for atom in [mol.GetAtomWithIdx(x) for x in p]:
             # Remove hydrogen and reduce formal change until neutral or no more hydrogens
             while atom.GetFormalCharge() > 0 and atom.GetNumExplicitHs() > 0:
                 atom.SetNumExplicitHs(atom.GetNumExplicitHs() - 1)
                 atom.SetFormalCharge(atom.GetFormalCharge() - 1)
-                log.info('Removed positive charge')
+                log.info('Removed positive charge from %s'%(atom.GetSymbol() + str(atom.GetIdx())))
         return mol

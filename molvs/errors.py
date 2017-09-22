@@ -29,3 +29,8 @@ class ValidateError(MolVSError):
 class StopValidateError(ValidateError):
     """Called by Validations to stop any further validations from being performed."""
     pass
+
+
+class BreakLoop(Exception):
+	"""Used in tautomer loop to break as soon as max iterations are hit"""
+	pass

@@ -19,9 +19,10 @@ import logging
 
 from rdkit import Chem
 
-from .metal import MetalDisconnector
+from .metal import MetalDisconnector, DISCONNECTS
 from .fragment import PREFER_ORGANIC, LargestFragmentChooser, FragmentRemover
 from .normalize import NORMALIZATIONS, MAX_RESTARTS, Normalizer
+from .prenormalize import PRENORMALIZATIONS, PreNormalizer
 from .tautomer import TAUTOMER_TRANSFORMS, TAUTOMER_SCORES, MAX_TAUTOMERS, TautomerCanonicalizer, TautomerEnumerator
 from .charge import ACID_BASE_PAIRS, Reionizer, Uncharger
 from .utils import memoized_property
@@ -43,7 +44,7 @@ class Standardizer(object):
 
     """
 
-    def __init__(self, normalizations=NORMALIZATIONS, acid_base_pairs=ACID_BASE_PAIRS,
+    def __init__(self, disconnects=DISCONNECTS, normalizations=NORMALIZATIONS, acid_base_pairs=ACID_BASE_PAIRS,
                  tautomer_transforms=TAUTOMER_TRANSFORMS, tautomer_scores=TAUTOMER_SCORES,
                  max_restarts=MAX_RESTARTS, max_tautomers=MAX_TAUTOMERS, prefer_organic=PREFER_ORGANIC):
         """Initialize a Standardizer with optional custom parameters.
@@ -64,9 +65,11 @@ class Standardizer(object):
         self.acid_base_pairs = acid_base_pairs
         self.tautomer_transforms = tautomer_transforms
         self.tautomer_scores = tautomer_scores
+	self.disconnects = disconnects
         self.max_restarts = max_restarts
         self.max_tautomers = max_tautomers
         self.prefer_organic = prefer_organic
+
 
     def __call__(self, mol):
         """Calling a Standardizer instance like a function is the same as calling its
@@ -232,7 +235,7 @@ class Standardizer(object):
         """
         :returns: A callable :class:`~molvs.metal.MetalDisconnector` instance.
         """
-        return MetalDisconnector()
+        return MetalDisconnector(disconnects=self.disconnects)
 
     @memoized_property
     def normalize(self):

@@ -16,20 +16,51 @@ import logging
 
 from rdkit import Chem
 
+from .utils import memoized_property
+
 
 log = logging.getLogger(__name__)
+
+
+class Disconnect(object):
+    """A Disconnect defined by SMARTS."""
+
+    def __init__(self, name, disconnect):
+        """
+        :param string name: A name for this Normalization
+        :param string transform: Reaction SMARTS to define the transformation.
+        """
+        log.debug('Initializing Normalization: %s', name)
+        self.name = name
+        self.disconnect_str = disconnect
+
+    @memoized_property
+    def disconnect(self):
+        log.debug('Loading disconnect smarts: %s', self.name)
+        return Chem.MolFromSmarts(self.disconnect_str.encode('utf8'))
+
+    def __repr__(self):
+        return 'Disconnect({!r}, {!r})'.format(self.name, self.disconnect_str)
+
+    def __str__(self):
+        return self.name
+
+DISCONNECTS = (
+	Disconnect("FDA metal-NOF", '[Li,Na,K,Rb,Cs,Fr,Be,Mg,Ca,Sr,Ba,Ra,Sc,Ti,V,Cr,Mn,Fe,Co,Ni,Cu,Zn,Al,Ga,Y,Zr,Nb,Mo,Tc,Ru,Rh,Pd,Ag,Cd,In,Sn,Hf,Ta,W,Re,Os,Ir,Pt,Au,Hg,Tl,Pb,Bi]~[N,O,F]'),
+	Disconnect("FDA Metal-Nonmetal", "[Li,Na,K,Rb,Cs,Fr,Be,Mg,Ca,Sr,Ba,Ra,Al,Sc,Ti,V,Cr,Mn,Fe,Co,Ni,Cu,Zn,Y,Zr,Nb,Mo,Tc,Ru,Rh,Pd,Ag,Cd,Hf,Ta,W,Re,Os,Ir,Pt,Au]~[B,C,Si,P,As,Sb,S,Se,Te,Cl,Br,I,At]")
+	)
+
 
 
 class MetalDisconnector(object):
     """Class for breaking covalent bonds between metals and organic atoms under certain conditions."""
 
-    def __init__(self):
+    def __init__(self, disconnects=DISCONNECTS):
         log.debug('Initializing MetalDisconnector')
         # Initialize SMARTS to identify relevant substructures
         # TODO: Use atomic numbers instead of element symbols in SMARTS to allow for isotopes?
-        self._metal_nof = Chem.MolFromSmarts('[Li,Na,K,Rb,Cs,F,Be,Mg,Ca,Sr,Ba,Ra,Sc,Ti,V,Cr,Mn,Fe,Co,Ni,Cu,Zn,Al,Ga,Y,Zr,Nb,Mo,Tc,Ru,Rh,Pd,Ag,Cd,In,Sn,Hf,Ta,W,Re,Os,Ir,Pt,Au,Hg,Tl,Pb,Bi]~[N,O,F]'.encode('utf8'))
-        self._metal_non = Chem.MolFromSmarts('[Al,Sc,Ti,V,Cr,Mn,Fe,Co,Ni,Cu,Zn,Y,Zr,Nb,Mo,Tc,Ru,Rh,Pd,Ag,Cd,Hf,Ta,W,Re,Os,Ir,Pt,Au]~[B,C,Si,P,As,Sb,S,Se,Te,Cl,Br,I,At]'.encode('utf8'))
-        self._free_metal = Chem.MolFromSmarts('[Li,Na,K,Mg,CaX0+0]'.encode('utf8'))
+        self.disconnects = disconnects
+        self._free_metal = Chem.MolFromSmarts('[Li+0,Na+0,K+0,Mg+0,CaX0+0]'.encode('utf8'))
         self._carboxylic = Chem.MolFromSmarts('[CX3](=O)[OX2H1]'.encode('utf8'))
 
     def __call__(self, mol):
@@ -50,10 +81,11 @@ class MetalDisconnector(object):
         :return: The molecule with metals disconnected.
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
-        log.debug('Running MetalDisconnector')
+        log.info('Running MetalDisconnector')
         # TODO: In future, maybe insert zero-order complex/ionic/dative bonds instead of disconnecting?
         # Remove bonds that match SMARTS
-        for smarts in [self._metal_nof, self._metal_non]:
+        for disconnectrule in self.disconnects: #[self._metal_nof, self._metal_non] + self._pauling_limit:
+            smarts = disconnectrule.disconnect
             pairs = mol.GetSubstructMatches(smarts)
             edmol = Chem.EditableMol(mol)
             orders = []

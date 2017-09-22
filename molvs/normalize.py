@@ -117,7 +117,7 @@ class Normalizer(object):
         :return: The normalized fragment.
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
-        log.debug('Running Normalizer')
+        log.info('Running Normalizer')
         # Normalize each fragment separately to get around quirky RunReactants behaviour
         fragments = []
         for fragment in Chem.GetMolFrags(mol, asMols=True):

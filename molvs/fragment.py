@@ -116,6 +116,9 @@ REMOVE_FRAGMENTS = (
 #: The default value for whether to ensure at least one fragment is left after FragmentRemover is applied.
 LEAVE_LAST = True
 
+#: The default value for whether the fragmentremover should return the deleted fragments as a list
+RETURN_FRAGMENTS = False
+
 #: The default value for whether LargestFragmentChooser sees organic fragments as "larger" than inorganic fragments.
 PREFER_ORGANIC = False
 
@@ -136,7 +139,7 @@ def is_organic(fragment):
 class FragmentRemover(object):
     """A class for filtering out fragments using SMARTS patterns."""
 
-    def __init__(self, fragments=REMOVE_FRAGMENTS, leave_last=LEAVE_LAST):
+    def __init__(self, fragments=REMOVE_FRAGMENTS, leave_last=LEAVE_LAST, return_fragments=RETURN_FRAGMENTS):
         """Initialize a FragmentRemover with an optional custom list of :class:`~molvs.fragment.FragmentPattern`.
 
         Setting leave_last to True will ensure at least one fragment is left in the molecule, even if it is matched by a
@@ -146,10 +149,12 @@ class FragmentRemover(object):
 
         :param fragments: A list of :class:`~molvs.fragment.FragmentPattern` to remove.
         :param bool leave_last: Whether to ensure at least one fragment is left.
+	:param bool return_fragments: Returns a tuple with the numbers of the fragment_rules matched
         """
         log.debug('Initializing FragmentRemover')
         self.fragments = fragments
         self.leave_last = leave_last
+	self.return_fragments = return_fragments
 
     def __call__(self, mol):
         """Calling a FragmentRemover instance like a function is the same as calling its remove(mol) method."""
@@ -163,9 +168,10 @@ class FragmentRemover(object):
         :return: The molecule with fragments removed.
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
-        log.debug('Running FragmentRemover')
+        log.info('Running FragmentRemover')
         # Iterate FragmentPatterns and remove matching fragments
-        for frag in self.fragments:
+	matchlist = []
+        for i,frag in enumerate(self.fragments):
             # If nothing is left or leave_last and only one fragment, end here
             if mol.GetNumAtoms() == 0 or (self.leave_last and len(Chem.GetMolFrags(mol)) <= 1):
                 break
@@ -173,17 +179,21 @@ class FragmentRemover(object):
             removed = Chem.DeleteSubstructs(mol, frag.smarts, onlyFrags=True)
             if not mol.GetNumAtoms() == removed.GetNumAtoms():
                 log.info('Removed fragment: %s', frag.name)
+		matchlist.append(i)
             if self.leave_last and removed.GetNumAtoms() == 0:
                 # All the remaining fragments match this pattern - leave them all
                 break
             mol = removed
-        return mol
+	if self.return_fragments:
+	        return mol, tuple(matchlist)
+	else:
+		return mol
 
 
 class LargestFragmentChooser(object):
     """A class for selecting the largest covalent unit in a molecule with multiple fragments."""
 
-    def __init__(self, prefer_organic=PREFER_ORGANIC):
+    def __init__(self, prefer_organic=PREFER_ORGANIC, return_fragments=RETURN_FRAGMENTS):
         """
 
         If prefer_organic is set to True, any organic fragment will be considered larger than any inorganic fragment. A
@@ -193,6 +203,7 @@ class LargestFragmentChooser(object):
         """
         log.debug('Initializing LargestFragmentChooser')
         self.prefer_organic = prefer_organic
+	self.return_fragments = return_fragments
 
     def __call__(self, mol):
         """Calling a LargestFragmentChooser instance like a function is the same as calling its choose(mol) method."""
@@ -209,10 +220,11 @@ class LargestFragmentChooser(object):
         :return: The largest fragment.
         :rtype: :rdkit:`Mol <Chem.rdchem.Mol-class.html>`
         """
-        log.debug('Running LargestFragmentChooser')
+        log.info('Running LargestFragmentChooser')
         # TODO: Alternatively allow a list of fragments to be passed as the mol parameter
         fragments = Chem.GetMolFrags(mol, asMols=True)
         largest = None
+	remfragments = []
         for f in fragments:
             smiles = Chem.MolToSmiles(f, isomericSmiles=True)
             log.debug('Fragment: %s', smiles)
@@ -220,9 +232,11 @@ class LargestFragmentChooser(object):
             if self.prefer_organic:
                 # Skip this fragment if not organic and we already have an organic fragment as the largest so far
                 if largest and largest['organic'] and not organic:
+		    remfragments.append(f)
                     continue
                 # Reset largest if it wasn't organic and this fragment is organic
                 if largest and organic and not largest['organic']:
+		    remfragments.append(largest['fragment'])
                     largest = None
             # Count atoms
             atoms = 0
@@ -230,15 +244,24 @@ class LargestFragmentChooser(object):
                 atoms += 1 + a.GetTotalNumHs()
             # Skip this fragment if fewer atoms than the largest
             if largest and atoms < largest['atoms']:
+	        remfragments.append(f)
                 continue
             # Skip this fragment if equal number of atoms but weight is lower
             weight = rdMolDescriptors.CalcExactMolWt(f)
             if largest and atoms == largest['atoms'] and weight < largest['weight']:
+                remfragments.append(f)
                 continue
             # Skip this fragment if equal atoms and equal weight but smiles comes last alphabetically
             if largest and atoms == largest['atoms'] and weight == largest['weight'] and smiles > largest['smiles']:
+                remfragments.append(f)
                 continue
             # Otherwise this is the largest so far
             log.debug('New largest fragment: %s (%s)', smiles, atoms)
             largest = {'smiles': smiles, 'fragment': f, 'atoms': atoms, 'weight': weight, 'organic': organic}
-        return largest['fragment']
+	if len(remfragments) > 0:
+		log.info('Removed fragments %s'%(remfragments))
+		log.info('Kept largest fragment %s'%(largest['smiles']))
+	if self.return_fragments:
+	        return largest['fragment'], remfragments
+	else:
+		return largest['fragment']
